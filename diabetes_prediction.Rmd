@@ -1,0 +1,202 @@
+---
+title: "Diabetes Prediction"
+output: html_notebook
+---
+Overview:
+Using a Kaggle dataset to visualize trends between pregnancy, BMI levels, and Diabetes and training a linear regression model to predict whether a patient has diabetes or not. 
+
+First we'll load all necessary libraries and look at the structure of the data set, identifying the information we have to work with.
+```{r}
+library(readr)
+library(caTools)
+library(caret)
+library(e1071)
+library(tidyverse)
+library(ggplot2)
+library(reshape2)
+
+data <- read.csv("diabetes.csv")
+head(data)
+```
+
+
+Next we'll clean the data by summarizing and checking for missing values. Although there are no NAs in the data set, some of the features like Insulin and SkinThickness contain zeros, potentially representing missing/unrecorded data.
+```{r}
+summary(data)
+data %>% is.na() %>% colSums()
+X <- data[, 1:8]
+Y <- data[, 9]
+```
+
+Let's do some visualization to help identify which variables may be most predictive of diabetes. Strong positive correlations with the outcome variable include Glucose and BMI. 
+```{r}
+cor_matrix <- cor(data)
+cor_melted <- melt(cor_matrix)
+
+ggplot(cor_melted, aes(Var1, Var2, fill=value)) + 
+  geom_tile(color="white") + 
+  scale_fill_gradient2(low="blue",high="red", mid="white", limit=c(-1,1), name="Correlation") +
+  theme(axis.text.x = element_text(angle=45, hjust=1)) +
+  labs(title="Correlation Heatmap", x="Features", y="Features")
+```
+
+We can also visualize the distribution of the outcome variable which is clearly imbalanced. The imbalance can affect model performance and will be addressed later using SMOTE.<br>
+Outcome = 0 -> the patient does not have diabetes.<br>
+Outcome = 1 -> the patient does have diabetes.
+
+```{r}
+outcome_count <- table(data$Outcome)
+outcome_df <- data.frame(Outcome = names(outcome_count),
+                         Count = as.numeric(outcome_count))
+ggplot(outcome_df, aes(x=Outcome, y=Count)) + 
+  geom_bar(stat="identity", fill="light pink") +
+  ggtitle("Distribution of Diabetes Outcomes")
+```
+
+This histogram shows the distribution of the number of pregnancies among patients, separated by diabetes outcome. We can see that patients with diabetes tend to have a higher number of pregnancies. Also notice the distribution is positively skewed. This indicates that most patients have fewer pregnancies, while a small number have significantly more.
+ 
+```{r}
+ggplot(data, aes(x=Pregnancies, fill=factor(Outcome))) + 
+         geom_histogram(bins=30, col="black") + facet_wrap(~Outcome, scales="free_y") +
+  ggtitle("Distribution of Pregnancies by Outcomes")
+```
+
+The box plot shows the distribution of BMI values for diabetic and non-diabetic patients. Patient with diabetes tend to have higher BMI scores which is expected considering known risk facotrs. 
+.
+```{r}
+ggplot(data, aes(x=factor(Outcome), y=BMI, fill=factor(Outcome))) +
+  geom_boxplot() + ylab("BMI") + ggtitle("BMI Distribution by Outcome")
+
+```
+
+Let's get ready to build and train our prediction model.
+First we'll split up the features into X and the outcome into Y, forming the final data set by scaling the features using z-score standardization. We'll use logistic regression to predict whether a patient has diabetes. 
+```{r}
+X <- data[, 1:8]
+Y <- data[, 9]
+
+scaled_X <- as.data.frame(scale(X))
+scaled_data <- cbind(scaled_X, Y)
+
+X <- scaled_data[, 1:8]
+Y <- scaled_data[, 9]
+
+set.seed(123)
+#sample split takes 70% of points from Y and set them to TRUE
+sample <- sample.split(Y, SplitRatio = 0.7)
+X_train <- X[sample == TRUE, ]
+Y_train <- Y[sample == TRUE]
+X_test <- X[sample == FALSE, ]
+Y_test <- Y[sample == FALSE]
+```
+
+After training the model, we evaluated its performance using a confusion matrix.
+```{r}
+log_model <- glm(Y_train ~ ., data=X_train, family=binomial)
+summary(log_model)
+
+predictions <- predict(log_model, newdata = X_test, type="response")
+predictions <- factor(ifelse(predictions > 0.5, 1, 0), 
+                      levels = levels(as.factor(Y_test)))
+
+confusionMatrix(predictions, as.factor(Y_test)) 
+```
+The following predictions were made.<br>- 23 patients incorrectly predicted to have diabetes <br>- 37 patients incorrectly predicted not to have diabetes <br>- 43 patients correctly predicted to have diabetes<br>- 127 patients correctly predicted not to have diabetes
+
+```{r}
+m<-confusionMatrix(predictions, as.factor(Y_test)) 
+prediction_results <- as.table(m)
+matrix_df <- as.data.frame(prediction_results)
+ggplot(matrix_df, aes(x=Reference, y=Prediction, fill=Freq)) + 
+  geom_tile() +
+  geom_text(aes(label = Freq), color = "black", size = 6) +  
+  scale_fill_gradient(low = "white", high = "blue") +
+  labs(title = "Confusion Matrix Heatmap", x = "Actual", y = "Predicted")
+```
+
+To address class imbalance, we'll apply SMOTE (synthetic minority over-sampling technique) to generate synthetic examples of the minority class. This will help the model learn more balanced decision boundaries.  
+```{r}
+library(ROSE)
+set.seed(199)
+
+smote_data <- ROSE(Outcome ~ ., data = data, N = 1500, p = 0.5)$data
+outcome_count_smote <- table(smote_data$Outcome)
+outcome_df_smote <- data.frame(Outcome = names(outcome_count_smote),
+                         Count = as.numeric(outcome_count_smote))
+```
+
+Now the distribution of outcomes is significantly more balanced. 
+```{r}
+library(gridExtra)
+p1 <- ggplot(outcome_df, aes(x=Outcome, y=Count)) + 
+  geom_bar(stat="identity", fill="light pink") +
+  ggtitle("Distribution of Diabetes Outcomes")
+p2 <- ggplot(outcome_df_smote, aes(x=Outcome, y=Count)) + 
+  geom_bar(stat="identity", fill="light pink") +
+  ggtitle("Distribution of Diabetes Outcomes (SMOTE data)")
+grid.arrange(p1,p2)
+```
+
+Also observe that the distribution of pregnancies across diabetes outcomes becomes more symmetrical and resembles a normal distribution. This confirms that the SMOTE helped create a more representative dataset for model training.
+```{r}
+p1 <- ggplot(data, aes(x=Pregnancies, fill=factor(Outcome))) + 
+         geom_histogram(bins=30, col="black") + facet_wrap(~Outcome, scales="free_y") +
+  ggtitle("Distribution of Pregnancies by Outcomes")
+
+p2 <- ggplot(smote_data, aes(x=Pregnancies, fill=factor(Outcome))) + 
+         geom_histogram(bins=30, col="black") + facet_wrap(~Outcome, scales="free_y") +
+  ggtitle("Distribution of Pregnancies by Outcomes (SMOTE data)")
+
+grid.arrange(p1,p2)
+```
+
+After applying SMOTE and retraining the model, we can see an improvement in accuracy and balanced performance metrics. 
+
+```{r}
+X_primed <- smote_data[, 1:8]
+Y_primed <- smote_data[, 9]
+
+scaled_X_primed <- as.data.frame(scale(X_primed))
+scaled_data_smote <- cbind(scaled_X_primed, Y_primed)
+
+X_primed <- scaled_data_smote[, 1:8]
+Y_primed <- scaled_data_smote[, 9]
+
+set.seed(123)
+sample <- sample.split(Y_primed, SplitRatio = 0.7)
+X_train <- X_primed[sample == TRUE, ]
+Y_train <- Y_primed[sample == TRUE]
+X_test <- X_primed[sample == FALSE, ]
+Y_test <- Y_primed[sample == FALSE]
+
+log_model <- glm(Y_train ~ ., data=X_train, family=binomial)
+summary(log_model)
+
+predictions <- predict(log_model, newdata = X_test, type="response")
+predictions <- factor(ifelse(predictions > 0.5, 1, 0), 
+                      levels = levels(as.factor(Y_test)))
+
+m <- confusionMatrix(predictions, as.factor(Y_test)) 
+m
+```
+The model's accuracy has improved from 73% to 76%!
+This improvement highlights the impact of data preprocessing techniques like scaling and oversampling. While logistic regression is a simple model, it provides a strong baseline for future experimentation with more complex algorithms.
+
+```{r}
+prediction_results <- as.table(m)
+matrix_df <- as.data.frame(prediction_results)
+
+ggplot(matrix_df, aes(x=Reference, y=Prediction, fill=Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), color = "black", size = 6) +
+  scale_fill_gradient(low = "white", high = "blue") +
+  labs(title = "Confusion Matrix Heatmap", x = "Actual", y = "Predicted")
+```
+
+The final prediction results are as follows:<br>- 51 patients incorrectly predicted to have diabetes <br>- 53 patients incorrectly predicted not to have diabetes <br>- 168 patients correctly predicted to have diabetes<br>- 178 patients correctly predicted not to have diabetes
+
+Sources:<br>
+https://www.kaggle.com/datasets/mathchi/diabetes-data-set/data<br>
+https://www.geeksforgeeks.org/machine-learning/how-to-use-smote-for-imbalanced-data-in-r/<br>
+https://www.geeksforgeeks.org/r-language/diabetes-prediction-using-r/
+
