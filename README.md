@@ -1,1 +1,1 @@
-View the R Markdown [Here!](https://rpubs.com/ak111/1348648)
+View the R Markdown [here](https://rpubs.com/ak111/1348648)
